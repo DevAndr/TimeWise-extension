@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import { Clock, Globe, Timer, Settings, Check, Cloud, CloudOff, ArrowLeft, Eye, EyeOff } from "lucide-react";
+import { Clock, Globe, Timer, Settings, Check, Cloud, CloudOff, ArrowLeft, Eye, EyeOff, RefreshCw, Loader2 } from "lucide-react";
+import { api, getAuthHeaders } from "../api/axiosInstance";
 
 interface SiteTime {
   domain: string;
@@ -59,6 +60,8 @@ function SettingsPage({ onBack }: { onBack: () => void }) {
   const [saved, setSaved] = useState(false);
   const [showToken, setShowToken] = useState(false);
   const [pendingCount, setPendingCount] = useState(0);
+  const [syncing, setSyncing] = useState(false);
+  const [syncResult, setSyncResult] = useState<{ ok: boolean; message: string } | null>(null);
 
   useEffect(() => {
     chrome.storage.local.get(["apiToken", "pendingQueue"], (result) => {
@@ -77,6 +80,55 @@ function SettingsPage({ onBack }: { onBack: () => void }) {
     }
     setSaved(true);
     setTimeout(() => setSaved(false), 2000);
+  }
+
+  async function handleSync() {
+    setSyncing(true);
+    setSyncResult(null);
+
+    try {
+      // Flush текущую сессию чтобы данные были актуальны
+      try {
+        await chrome.runtime.sendMessage({ type: "flush" });
+      } catch { /* sw might not be ready */ }
+
+      const result = await chrome.storage.local.get("timeData");
+      const timeData = (result.timeData as Record<string, number> | undefined) ?? {};
+      const domains = Object.entries(timeData);
+
+      if (domains.length === 0) {
+        setSyncResult({ ok: true, message: "Нет данных для синхронизации" });
+        setSyncing(false);
+        return;
+      }
+
+      const now = new Date();
+      const activities = domains.map(([domain, timeMs]) => ({
+        domain,
+        duration: Math.round(timeMs / 1000),
+        startedAt: new Date(now.getTime() - timeMs).toISOString(),
+        endedAt: now.toISOString(),
+      }));
+
+      const headers = await getAuthHeaders();
+      await api.post("/activities/batch", activities, { headers });
+
+      setSyncResult({ ok: true, message: `Отправлено: ${activities.length} сайтов` });
+
+      // Отправляем и pending очередь
+      const pendingResult = await chrome.storage.local.get("pendingQueue");
+      const queue = (pendingResult.pendingQueue as unknown[]) ?? [];
+      if (queue.length > 0) {
+        await api.post("/activities/batch", queue, { headers });
+        await chrome.storage.local.set({ pendingQueue: [] });
+        setPendingCount(0);
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Ошибка соединения";
+      setSyncResult({ ok: false, message });
+    }
+
+    setSyncing(false);
   }
 
   return (
@@ -150,6 +202,44 @@ function SettingsPage({ onBack }: { onBack: () => void }) {
           {pendingCount > 0 && (
             <p className="text-xs text-amber-400 mt-2">
               В очереди: {pendingCount} {pendingCount === 1 ? "запись" : "записей"}
+            </p>
+          )}
+        </div>
+
+        {/* Sync button */}
+        <div className="rounded-xl bg-surface-light border border-border p-4 mt-3">
+          <label className="text-xs text-text-muted uppercase tracking-wider font-medium mb-2 block">
+            Отправить данные на сервер
+          </label>
+          <p className="text-xs text-text-muted mb-3">
+            Отправит все локальные данные на бэкенд через POST /activities/batch
+          </p>
+          <button
+            onClick={handleSync}
+            disabled={syncing || !token}
+            className={`w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg text-sm font-medium transition-all ${
+              !token
+                ? "bg-surface border border-border text-text-muted cursor-not-allowed"
+                : syncing
+                  ? "bg-accent/10 text-accent-light cursor-wait"
+                  : "bg-accent/15 text-accent-light hover:bg-accent/25"
+            }`}
+          >
+            {syncing ? (
+              <>
+                <Loader2 className="w-4 h-4 animate-spin" />
+                Синхронизация...
+              </>
+            ) : (
+              <>
+                <RefreshCw className="w-4 h-4" />
+                Синхронизировать
+              </>
+            )}
+          </button>
+          {syncResult && (
+            <p className={`text-xs mt-2 ${syncResult.ok ? "text-green" : "text-red-400"}`}>
+              {syncResult.message}
             </p>
           )}
         </div>
