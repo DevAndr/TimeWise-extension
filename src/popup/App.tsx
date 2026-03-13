@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Clock, Globe, Timer } from "lucide-react";
+import { Clock, Globe, Timer, Settings, Check, Cloud, CloudOff, ArrowLeft, Eye, EyeOff } from "lucide-react";
 
 interface SiteTime {
   domain: string;
@@ -53,14 +53,130 @@ function getDomainFromUrl(url: string): string | null {
   }
 }
 
+// --- Settings page ---
+function SettingsPage({ onBack }: { onBack: () => void }) {
+  const [token, setToken] = useState("");
+  const [saved, setSaved] = useState(false);
+  const [showToken, setShowToken] = useState(false);
+  const [pendingCount, setPendingCount] = useState(0);
+
+  useEffect(() => {
+    chrome.storage.local.get(["apiToken", "pendingQueue"], (result) => {
+      setToken((result.apiToken as string) ?? "");
+      const queue = (result.pendingQueue as unknown[]) ?? [];
+      setPendingCount(queue.length);
+    });
+  }, []);
+
+  async function handleSave() {
+    const trimmed = token.trim();
+    if (trimmed) {
+      await chrome.storage.local.set({ apiToken: trimmed });
+    } else {
+      await chrome.storage.local.remove("apiToken");
+    }
+    setSaved(true);
+    setTimeout(() => setSaved(false), 2000);
+  }
+
+  return (
+    <div className="flex flex-col h-full">
+      <div className="px-5 pt-5 pb-4">
+        <div className="flex items-center gap-2.5 mb-5">
+          <button
+            onClick={onBack}
+            className="w-8 h-8 rounded-lg bg-surface-light border border-border flex items-center justify-center hover:bg-surface-hover transition-colors"
+          >
+            <ArrowLeft className="w-4 h-4 text-text-secondary" />
+          </button>
+          <h1 className="text-base font-semibold tracking-tight">Настройки</h1>
+        </div>
+
+        {/* Token input */}
+        <div className="rounded-xl bg-surface-light border border-border p-4 mb-3">
+          <label className="text-xs text-text-muted uppercase tracking-wider font-medium mb-2 block">
+            API Токен
+          </label>
+          <div className="flex gap-2">
+            <div className="relative flex-1">
+              <input
+                type={showToken ? "text" : "password"}
+                value={token}
+                onChange={(e) => setToken(e.target.value)}
+                placeholder="Вставьте токен..."
+                className="w-full bg-surface border border-border rounded-lg px-3 py-2 pr-9 text-sm text-text-primary placeholder:text-text-muted outline-none focus:border-accent/50 transition-colors"
+              />
+              <button
+                onClick={() => setShowToken(!showToken)}
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-text-muted hover:text-text-secondary transition-colors"
+              >
+                {showToken ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+              </button>
+            </div>
+            <button
+              onClick={handleSave}
+              className={`px-3 py-2 rounded-lg text-sm font-medium transition-all ${
+                saved
+                  ? "bg-green/20 text-green"
+                  : "bg-accent/15 text-accent-light hover:bg-accent/25"
+              }`}
+            >
+              {saved ? <Check className="w-4 h-4" /> : "Сохранить"}
+            </button>
+          </div>
+          <p className="text-xs text-text-muted mt-2">
+            Получите токен через POST /api-tokens на сервере
+          </p>
+        </div>
+
+        {/* Sync status */}
+        <div className="rounded-xl bg-surface-light border border-border p-4">
+          <label className="text-xs text-text-muted uppercase tracking-wider font-medium mb-2 block">
+            Синхронизация
+          </label>
+          <div className="flex items-center gap-2.5">
+            {token ? (
+              <>
+                <Cloud className="w-4 h-4 text-green" />
+                <span className="text-sm text-text-secondary">Подключено</span>
+              </>
+            ) : (
+              <>
+                <CloudOff className="w-4 h-4 text-text-muted" />
+                <span className="text-sm text-text-muted">Токен не задан</span>
+              </>
+            )}
+          </div>
+          {pendingCount > 0 && (
+            <p className="text-xs text-amber-400 mt-2">
+              В очереди: {pendingCount} {pendingCount === 1 ? "запись" : "записей"}
+            </p>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// --- Main page ---
 function App() {
+  const [page, setPage] = useState<"main" | "settings">("main");
   const [sites, setSites] = useState<SiteTime[]>([]);
   const [activeDomain, setActiveDomain] = useState<string | null>(null);
+  const [synced, setSynced] = useState(false);
 
   const baseDataRef = useRef<Record<string, number>>({});
   const sessionRef = useRef<ActiveSession | null>(null);
 
   useEffect(() => {
+    chrome.storage.local.get("apiToken", (result) => {
+      setSynced(!!result.apiToken);
+    });
+  }, [page]);
+
+  useEffect(() => {
+    if (page !== "main") return;
+
     async function loadData() {
       let timeData: Record<string, number> = {};
       let session: ActiveSession | null = null;
@@ -87,7 +203,7 @@ function App() {
     }, 1000);
 
     return () => clearInterval(interval);
-  }, []);
+  }, [page]);
 
   function updateSites(
     baseData: Record<string, number>,
@@ -110,6 +226,10 @@ function App() {
     setSites(entries);
   }
 
+  if (page === "settings") {
+    return <SettingsPage onBack={() => setPage("main")} />;
+  }
+
   const totalTime = sites.reduce((sum, s) => sum + s.time, 0);
   const maxTime = sites.length > 0 ? sites[0].time : 0;
 
@@ -124,12 +244,23 @@ function App() {
             </div>
             <h1 className="text-base font-semibold tracking-tight">TimeWise</h1>
           </div>
-          {activeDomain && (
-            <div className="flex items-center gap-1.5 text-xs text-green">
-              <span className="w-1.5 h-1.5 rounded-full bg-green animate-pulse-dot" />
-              Tracking
-            </div>
-          )}
+          <div className="flex items-center gap-2">
+            {activeDomain && (
+              <div className="flex items-center gap-1.5 text-xs text-green">
+                <span className="w-1.5 h-1.5 rounded-full bg-green animate-pulse-dot" />
+                Tracking
+              </div>
+            )}
+            {synced && (
+              <Cloud className="w-3.5 h-3.5 text-accent-light" />
+            )}
+            <button
+              onClick={() => setPage("settings")}
+              className="w-8 h-8 rounded-lg bg-surface-light border border-border flex items-center justify-center hover:bg-surface-hover transition-colors"
+            >
+              <Settings className="w-4 h-4 text-text-secondary" />
+            </button>
+          </div>
         </div>
 
         {/* Total card */}

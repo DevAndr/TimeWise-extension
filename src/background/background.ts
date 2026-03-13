@@ -1,10 +1,23 @@
 // Активная сессия хранится в chrome.storage.session, чтобы пережить перезапуск service worker
 // timeData хранится в chrome.storage.local (персистентно)
+// Синхронизация с бэкендом через API
+
+import { api, getAuthHeaders } from "../api/axiosInstance";
 
 interface ActiveSession {
   tabId: number;
   startTime: number;
   url: string;
+  title?: string;
+}
+
+interface PendingActivity {
+  domain: string;
+  url: string;
+  title?: string;
+  duration: number; // секунды
+  startedAt: string; // ISO
+  endedAt: string; // ISO
 }
 
 function getDomainFromUrl(url: string): string | null {
@@ -15,13 +28,13 @@ function getDomainFromUrl(url: string): string | null {
   }
 }
 
-// Получить активную сессию из storage
+// --- Storage helpers ---
+
 async function getActiveSession(): Promise<ActiveSession | null> {
   const result = await chrome.storage.session.get("activeSession");
   return (result.activeSession as ActiveSession | undefined) ?? null;
 }
 
-// Сохранить активную сессию в storage
 async function setActiveSession(session: ActiveSession | null) {
   if (session) {
     await chrome.storage.session.set({ activeSession: session });
@@ -30,7 +43,91 @@ async function setActiveSession(session: ActiveSession | null) {
   }
 }
 
-// Накопить время из текущей сессии в timeData
+// Очередь неотправленных активностей (на случай если бэк недоступен)
+async function getPendingQueue(): Promise<PendingActivity[]> {
+  const result = await chrome.storage.local.get("pendingQueue");
+  return (result.pendingQueue as PendingActivity[] | undefined) ?? [];
+}
+
+async function setPendingQueue(queue: PendingActivity[]) {
+  await chrome.storage.local.set({ pendingQueue: queue });
+}
+
+// --- Sync с бэкендом ---
+
+async function hasToken(): Promise<boolean> {
+  const result = await chrome.storage.local.get("apiToken");
+  return !!result.apiToken;
+}
+
+async function sendToBackend(activity: PendingActivity) {
+  const headers = await getAuthHeaders();
+  await api.post("/activities", activity, { headers });
+}
+
+// Попытка отправить очередь неотправленных (по одному, batch не поддерживает объекты)
+async function flushPendingQueue() {
+  if (!(await hasToken())) return;
+
+  const queue = await getPendingQueue();
+  if (queue.length === 0) return;
+
+  const headers = await getAuthHeaders();
+  const failed: PendingActivity[] = [];
+  for (const activity of queue) {
+    try {
+      await api.post("/activities", activity, { headers });
+    } catch {
+      failed.push(activity);
+    }
+  }
+
+  await setPendingQueue(failed);
+  const sent = queue.length - failed.length;
+  if (sent > 0) {
+    console.log(`[TimeWise] Synced ${sent} pending activities`);
+  }
+  if (failed.length > 0) {
+    console.warn(`[TimeWise] ${failed.length} activities still in queue`);
+  }
+}
+
+// Записать activity и попробовать отправить на бэк
+async function recordActivity(
+  domain: string,
+  url: string,
+  title: string | undefined,
+  durationMs: number,
+  startTime: number
+) {
+  const durationSec = Math.round(durationMs / 1000);
+  if (durationSec < 1) return;
+
+  const activity: PendingActivity = {
+    domain,
+    url,
+    title,
+    duration: durationSec,
+    startedAt: new Date(startTime).toISOString(),
+    endedAt: new Date(startTime + durationMs).toISOString(),
+  };
+
+  if (!(await hasToken())) return;
+
+  try {
+    await sendToBackend(activity);
+    console.log(`[TimeWise] Sent: ${durationSec}s на ${domain}`);
+  } catch {
+    // Бэк недоступен — сохраняем в очередь
+    const queue = await getPendingQueue();
+    queue.push(activity);
+    await setPendingQueue(queue);
+    console.warn(`[TimeWise] Queued: ${durationSec}s на ${domain} (backend unavailable)`);
+  }
+}
+
+// --- Flush & Track ---
+
 async function flushSession() {
   const session = await getActiveSession();
   if (!session) return;
@@ -41,29 +138,29 @@ async function flushSession() {
   if (elapsed > 500) {
     const domain = getDomainFromUrl(session.url);
     if (domain) {
+      // Сохраняем локально
       const result = await chrome.storage.local.get("timeData");
       const timeData = (result.timeData as Record<string, number> | undefined) ?? {};
       timeData[domain] = (timeData[domain] ?? 0) + elapsed;
       await chrome.storage.local.set({ timeData });
+
+      // Отправляем на бэк
+      await recordActivity(domain, session.url, session.title, elapsed, session.startTime);
+
       console.log(`[TimeWise] flush: +${Math.round(elapsed / 1000)}s на ${domain}`);
     }
   }
 
-  // Сдвигаем startTime на "сейчас", чтобы не считать дважды
   await setActiveSession({ ...session, startTime: now });
 }
 
-// Начать трекать вкладку
-async function startTracking(tabId: number, url: string | undefined) {
+async function startTracking(tabId: number, url: string | undefined, title?: string) {
   if (!url || url.startsWith("chrome://") || url.startsWith("chrome-extension://")) return;
 
-  // Сначала сохраняем накопленное время предыдущей сессии
   await flushSession();
-
-  await setActiveSession({ tabId, startTime: Date.now(), url });
+  await setActiveSession({ tabId, startTime: Date.now(), url, title });
 }
 
-// Остановить трекинг (idle / закрытие вкладки)
 async function stopTracking() {
   await flushSession();
   await setActiveSession(null);
@@ -71,28 +168,22 @@ async function stopTracking() {
 
 // --- Listeners ---
 
-// Переключение между вкладками
 chrome.tabs.onActivated.addListener(async (activeInfo) => {
   try {
     const tab = await chrome.tabs.get(activeInfo.tabId);
-    await startTracking(activeInfo.tabId, tab.url);
+    await startTracking(activeInfo.tabId, tab.url, tab.title);
   } catch {
     // вкладка могла быть уже закрыта
   }
 });
 
-// Навигация внутри вкладки
 chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
   if (changeInfo.status !== "complete" || !tab.url) return;
-
-  // Трекаем только если это активная вкладка
   const session = await getActiveSession();
   if (!session || session.tabId !== tabId) return;
-
-  await startTracking(tabId, tab.url);
+  await startTracking(tabId, tab.url, tab.title);
 });
 
-// Закрытие вкладки
 chrome.tabs.onRemoved.addListener(async (tabId) => {
   const session = await getActiveSession();
   if (session && session.tabId === tabId) {
@@ -100,33 +191,28 @@ chrome.tabs.onRemoved.addListener(async (tabId) => {
   }
 });
 
-// Idle — пользователь отошёл
 chrome.idle.setDetectionInterval(60);
 chrome.idle.onStateChanged.addListener(async (state) => {
   if (state === "idle" || state === "locked") {
     await stopTracking();
   } else if (state === "active") {
-    // Вернулся — возобновляем трекинг активной вкладки
     const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
     if (tabs[0]?.id !== undefined) {
-      await startTracking(tabs[0].id, tabs[0].url);
+      await startTracking(tabs[0].id, tabs[0].url, tabs[0].title);
     }
   }
 });
 
-// Переключение между окнами
 chrome.windows.onFocusChanged.addListener(async (windowId) => {
   if (windowId === chrome.windows.WINDOW_ID_NONE) {
-    // Все окна потеряли фокус (свернули браузер)
     await stopTracking();
     return;
   }
   const tabs = await chrome.tabs.query({ active: true, windowId });
   const tab = tabs[0];
   if (tab?.id !== undefined && tab.url) {
-    // Не сбрасываем трекинг для chrome-extension:// (popup) — оставляем текущую сессию
     if (tab.url.startsWith("chrome-extension://")) return;
-    await startTracking(tab.id, tab.url);
+    await startTracking(tab.id, tab.url, tab.title);
   }
 });
 
@@ -140,13 +226,12 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     (async () => {
       await flushSession();
 
-      // Если сессия потерялась (SW перезапустился, focus-событие сбросило) — восстановим
       let session = await getActiveSession();
       if (!session) {
         const tabs = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
         const tab = tabs[0];
         if (tab?.id !== undefined && tab.url && !tab.url.startsWith("chrome")) {
-          await setActiveSession({ tabId: tab.id, startTime: Date.now(), url: tab.url });
+          await setActiveSession({ tabId: tab.id, startTime: Date.now(), url: tab.url, title: tab.title });
           session = await getActiveSession();
         }
       }
@@ -161,17 +246,18 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
 });
 
-// Alarm — периодический flush каждые 30 секунд (вместо setInterval, который не работает в MV3)
+// Alarm — flush каждые 30 секунд + попытка отправить очередь
 chrome.alarms.create("timewise-flush", { periodInMinutes: 0.5 });
 chrome.alarms.onAlarm.addListener(async (alarm) => {
   if (alarm.name === "timewise-flush") {
     await flushSession();
+    await flushPendingQueue();
   }
 });
 
-// При старте service worker — начать трекать текущую вкладку
+// При старте service worker
 chrome.tabs.query({ active: true, currentWindow: true }, async (tabs) => {
   if (tabs[0]?.id !== undefined) {
-    await startTracking(tabs[0].id, tabs[0].url);
+    await startTracking(tabs[0].id, tabs[0].url, tabs[0].title);
   }
 });
