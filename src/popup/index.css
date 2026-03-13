@@ -1,7 +1,45 @@
 @import "tailwindcss";
 
+@theme {
+  --color-surface: #0f1117;
+  --color-surface-light: #181a24;
+  --color-surface-hover: #1e2130;
+  --color-accent: #6366f1;
+  --color-accent-light: #818cf8;
+  --color-accent-glow: rgba(99, 102, 241, 0.15);
+  --color-accent-glow-strong: rgba(99, 102, 241, 0.25);
+  --color-text-primary: #f1f5f9;
+  --color-text-secondary: #94a3b8;
+  --color-text-muted: #475569;
+  --color-border: #1e293b;
+  --color-green: #34d399;
+}
+
 body {
-  width: 360px;
-  min-height: 480px;
-  @apply bg-mist-950 text-gray-100;
+  width: 380px;
+  min-height: 500px;
+  background: var(--color-surface);
+  color: var(--color-text-primary);
+}
+
+/* пульсирующая точка для активного сайта */
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+.animate-pulse-dot {
+  animation: pulse-dot 1.5s ease-in-out infinite;
+}
+
+/* плавный скролл списка */
+.scrollbar-thin::-webkit-scrollbar {
+  width: 4px;
+}
+.scrollbar-thin::-webkit-scrollbar-track {
+  background: transparent;
+}
+.scrollbar-thin::-webkit-scrollbar-thumb {
+  background: var(--color-border);
+  border-radius: 4px;
 }

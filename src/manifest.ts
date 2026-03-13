@@ -5,7 +5,7 @@ export default defineManifest({
     name: "TimeWise",
     version: "1.0.0",
     description: "A Chrome extension to track and manage your time effectively.",
-    permissions: ["storage", "tabs", "activeTab", "clipboardWrite", "idle"],
+    permissions: ["storage", "tabs", "activeTab", "clipboardWrite", "idle", "alarms"],
     background: {
         service_worker: "src/background/background.ts",
         type: "module"
