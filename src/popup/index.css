@@ -1,0 +1,7 @@
+@import "tailwindcss";
+
+body {
+  width: 360px;
+  min-height: 480px;
+  @apply bg-mist-950 text-gray-100;
+}
