@@ -117,13 +117,16 @@ chrome.idle.onStateChanged.addListener(async (state) => {
 // Переключение между окнами
 chrome.windows.onFocusChanged.addListener(async (windowId) => {
   if (windowId === chrome.windows.WINDOW_ID_NONE) {
-    // Все окна потеряли фокус
+    // Все окна потеряли фокус (свернули браузер)
     await stopTracking();
     return;
   }
   const tabs = await chrome.tabs.query({ active: true, windowId });
-  if (tabs[0]?.id !== undefined) {
-    await startTracking(tabs[0].id, tabs[0].url);
+  const tab = tabs[0];
+  if (tab?.id !== undefined && tab.url) {
+    // Не сбрасываем трекинг для chrome-extension:// (popup) — оставляем текущую сессию
+    if (tab.url.startsWith("chrome-extension://")) return;
+    await startTracking(tab.id, tab.url);
   }
 });
 
@@ -136,13 +139,22 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message.type === "getData") {
     (async () => {
       await flushSession();
-      const [timeResult, sessionResult] = await Promise.all([
-        chrome.storage.local.get("timeData"),
-        chrome.storage.session.get("activeSession"),
-      ]);
+
+      // Если сессия потерялась (SW перезапустился, focus-событие сбросило) — восстановим
+      let session = await getActiveSession();
+      if (!session) {
+        const tabs = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+        const tab = tabs[0];
+        if (tab?.id !== undefined && tab.url && !tab.url.startsWith("chrome")) {
+          await setActiveSession({ tabId: tab.id, startTime: Date.now(), url: tab.url });
+          session = await getActiveSession();
+        }
+      }
+
+      const timeResult = await chrome.storage.local.get("timeData");
       sendResponse({
         timeData: timeResult.timeData ?? {},
-        activeSession: sessionResult.activeSession ?? null,
+        activeSession: session,
       });
     })();
     return true;
