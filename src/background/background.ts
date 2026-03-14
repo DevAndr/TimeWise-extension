@@ -1,8 +1,12 @@
 // Активная сессия хранится в chrome.storage.session, чтобы пережить перезапуск service worker
 // timeData хранится в chrome.storage.local (персистентно)
+// Формат: { "2026-03-14": { "google.com": 3600000 }, ... }
 // Синхронизация с бэкендом через API
 
 import { api, getAuthHeaders } from "../api/axiosInstance";
+
+// Данные по дням: дата (YYYY-MM-DD) → домен → миллисекунды
+type TimeData = Record<string, Record<string, number>>;
 
 interface ActiveSession {
   tabId: number;
@@ -25,6 +29,27 @@ function getDomainFromUrl(url: string): string | null {
     return new URL(url).hostname;
   } catch {
     return null;
+  }
+}
+
+function getTodayKey(): string {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+// Миграция старого формата Record<string, number> → TimeData
+async function migrateIfNeeded() {
+  const result = await chrome.storage.local.get("timeData");
+  const raw = result.timeData;
+  if (!raw || typeof raw !== "object") return;
+
+  // Проверяем, старый ли формат (значения — числа, а не объекты)
+  const firstValue = Object.values(raw)[0];
+  if (typeof firstValue === "number") {
+    const today = getTodayKey();
+    const migrated: TimeData = { [today]: raw as Record<string, number> };
+    await chrome.storage.local.set({ timeData: migrated });
+    console.log("[TimeWise] Migrated timeData to per-day format");
   }
 }
 
@@ -138,10 +163,12 @@ async function flushSession() {
   if (elapsed > 500) {
     const domain = getDomainFromUrl(session.url);
     if (domain) {
-      // Сохраняем локально
+      // Сохраняем локально по текущему дню
+      const today = getTodayKey();
       const result = await chrome.storage.local.get("timeData");
-      const timeData = (result.timeData as Record<string, number> | undefined) ?? {};
-      timeData[domain] = (timeData[domain] ?? 0) + elapsed;
+      const timeData = (result.timeData as TimeData | undefined) ?? {};
+      if (!timeData[today]) timeData[today] = {};
+      timeData[today][domain] = (timeData[today][domain] ?? 0) + elapsed;
       await chrome.storage.local.set({ timeData });
 
       // Отправляем на бэк
@@ -236,10 +263,19 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         }
       }
 
+      const dateKey = message.date ?? getTodayKey();
       const timeResult = await chrome.storage.local.get("timeData");
+      const allData = (timeResult.timeData as TimeData | undefined) ?? {};
+      const dayData = allData[dateKey] ?? {};
+
+      // Список доступных дат для навигации
+      const availableDates = Object.keys(allData).sort();
+
       sendResponse({
-        timeData: timeResult.timeData ?? {},
+        timeData: dayData,
         activeSession: session,
+        date: dateKey,
+        availableDates,
       });
     })();
     return true;
@@ -255,9 +291,11 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
   }
 });
 
-// При старте service worker
-chrome.tabs.query({ active: true, currentWindow: true }, async (tabs) => {
-  if (tabs[0]?.id !== undefined) {
-    await startTracking(tabs[0].id, tabs[0].url, tabs[0].title);
-  }
+// При старте service worker — миграция и начало отслеживания
+migrateIfNeeded().then(() => {
+  chrome.tabs.query({ active: true, currentWindow: true }, async (tabs) => {
+    if (tabs[0]?.id !== undefined) {
+      await startTracking(tabs[0].id, tabs[0].url, tabs[0].title);
+    }
+  });
 });

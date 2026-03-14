@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Clock, Globe, Timer, Settings, Check, Cloud, CloudOff, ArrowLeft, Eye, EyeOff, RefreshCw, Loader2 } from "lucide-react";
+import { Clock, Globe, Timer, Settings, Check, Cloud, CloudOff, ArrowLeft, Eye, EyeOff, RefreshCw, Loader2, ChevronLeft, ChevronRight } from "lucide-react";
 import { api, getAuthHeaders } from "../api/axiosInstance";
 
 interface SiteTime {
@@ -54,6 +54,26 @@ function getDomainFromUrl(url: string): string | null {
   }
 }
 
+function getTodayKey(): string {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+function shiftDate(dateKey: string, days: number): string {
+  const d = new Date(dateKey + "T00:00:00");
+  d.setDate(d.getDate() + days);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+function formatDateLabel(dateKey: string): string {
+  const today = getTodayKey();
+  if (dateKey === today) return "Сегодня";
+  if (dateKey === shiftDate(today, -1)) return "Вчера";
+
+  const d = new Date(dateKey + "T00:00:00");
+  return d.toLocaleDateString("ru-RU", { day: "numeric", month: "short" });
+}
+
 // --- Settings page ---
 function SettingsPage({ onBack }: { onBack: () => void }) {
   const [token, setToken] = useState("");
@@ -93,22 +113,28 @@ function SettingsPage({ onBack }: { onBack: () => void }) {
       } catch { /* sw might not be ready */ }
 
       const result = await chrome.storage.local.get("timeData");
-      const timeData = (result.timeData as Record<string, number> | undefined) ?? {};
-      const domains = Object.entries(timeData);
+      const allData = (result.timeData as Record<string, Record<string, number>> | undefined) ?? {};
+      const allDates = Object.keys(allData);
 
-      if (domains.length === 0) {
+      if (allDates.length === 0) {
         setSyncResult({ ok: true, message: "Нет данных для синхронизации" });
         setSyncing(false);
         return;
       }
 
-      const now = new Date();
-      const activities = domains.map(([domain, timeMs]) => ({
-        domain,
-        duration: Math.round(timeMs / 1000),
-        startedAt: new Date(now.getTime() - timeMs).toISOString(),
-        endedAt: now.toISOString(),
-      }));
+      // Собираем активности по всем дням
+      const activities: { domain: string; duration: number; startedAt: string; endedAt: string }[] = [];
+      for (const [dateKey, domains] of Object.entries(allData)) {
+        const dayEnd = new Date(dateKey + "T23:59:59");
+        for (const [domain, timeMs] of Object.entries(domains)) {
+          activities.push({
+            domain,
+            duration: Math.round(timeMs / 1000),
+            startedAt: new Date(dayEnd.getTime() - timeMs).toISOString(),
+            endedAt: dayEnd.toISOString(),
+          });
+        }
+      }
 
       const headers = await getAuthHeaders();
       await api.post("/activities/batch", activities, { headers });
@@ -254,9 +280,18 @@ function App() {
   const [sites, setSites] = useState<SiteTime[]>([]);
   const [activeDomain, setActiveDomain] = useState<string | null>(null);
   const [synced, setSynced] = useState(false);
+  const [selectedDate, setSelectedDate] = useState(getTodayKey());
 
   const baseDataRef = useRef<Record<string, number>>({});
   const sessionRef = useRef<ActiveSession | null>(null);
+  const selectedDateRef = useRef(selectedDate);
+
+  // Синхронизируем ref с состоянием для использования в интервале
+  useEffect(() => {
+    selectedDateRef.current = selectedDate;
+  }, [selectedDate]);
+
+  const isToday = selectedDate === getTodayKey();
 
   useEffect(() => {
     chrome.storage.local.get("apiToken", (result) => {
@@ -267,54 +302,59 @@ function App() {
   useEffect(() => {
     if (page !== "main") return;
 
+    function updateSites(
+      baseData: Record<string, number>,
+      session: ActiveSession | null
+    ) {
+      const data = { ...baseData };
+
+      if (session) {
+        const domain = getDomainFromUrl(session.url);
+        if (domain) {
+          const elapsed = Date.now() - session.startTime;
+          data[domain] = (data[domain] ?? 0) + elapsed;
+        }
+      }
+
+      const entries: SiteTime[] = Object.entries(data)
+        .map(([domain, time]) => ({ domain, time }))
+        .sort((a, b) => b.time - a.time);
+
+      setSites(entries);
+    }
+
+    const todayKey = getTodayKey();
+    const viewingToday = selectedDate === todayKey;
+
     async function loadData() {
       let timeData: Record<string, number> = {};
       let session: ActiveSession | null = null;
 
       try {
-        const response = await chrome.runtime.sendMessage({ type: "getData" });
+        const response = await chrome.runtime.sendMessage({ type: "getData", date: selectedDate });
         timeData = response.timeData ?? {};
         session = response.activeSession ?? null;
       } catch {
         const result = await chrome.storage.local.get("timeData");
-        timeData = (result.timeData as Record<string, number>) ?? {};
+        const allData = (result.timeData as Record<string, Record<string, number>>) ?? {};
+        timeData = allData[selectedDate] ?? {};
       }
 
       baseDataRef.current = timeData;
       sessionRef.current = session;
       setActiveDomain(session ? getDomainFromUrl(session.url) : null);
-      updateSites(timeData, session);
+      updateSites(timeData, viewingToday ? session : null);
     }
 
     loadData();
 
     const interval = setInterval(() => {
-      updateSites(baseDataRef.current, sessionRef.current);
+      const showSession = selectedDateRef.current === getTodayKey();
+      updateSites(baseDataRef.current, showSession ? sessionRef.current : null);
     }, 1000);
 
     return () => clearInterval(interval);
-  }, [page]);
-
-  function updateSites(
-    baseData: Record<string, number>,
-    session: ActiveSession | null
-  ) {
-    const data = { ...baseData };
-
-    if (session) {
-      const domain = getDomainFromUrl(session.url);
-      if (domain) {
-        const elapsed = Date.now() - session.startTime;
-        data[domain] = (data[domain] ?? 0) + elapsed;
-      }
-    }
-
-    const entries: SiteTime[] = Object.entries(data)
-      .map(([domain, time]) => ({ domain, time }))
-      .sort((a, b) => b.time - a.time);
-
-    setSites(entries);
-  }
+  }, [page, selectedDate]);
 
   if (page === "settings") {
     return <SettingsPage onBack={() => setPage("main")} />;
@@ -353,12 +393,37 @@ function App() {
           </div>
         </div>
 
+        {/* Date navigation */}
+        <div className="flex items-center justify-between rounded-xl bg-surface-light border border-border px-3 py-2.5 mb-3">
+          <button
+            onClick={() => setSelectedDate(shiftDate(selectedDate, -1))}
+            className="w-7 h-7 rounded-lg hover:bg-surface-hover flex items-center justify-center transition-colors"
+          >
+            <ChevronLeft className="w-4 h-4 text-text-secondary" />
+          </button>
+          <button
+            onClick={() => !isToday && setSelectedDate(getTodayKey())}
+            className={`text-sm font-medium ${isToday ? "text-text-primary" : "text-accent-light hover:underline"}`}
+          >
+            {formatDateLabel(selectedDate)}
+          </button>
+          <button
+            onClick={() => !isToday && setSelectedDate(shiftDate(selectedDate, 1))}
+            disabled={isToday}
+            className={`w-7 h-7 rounded-lg flex items-center justify-center transition-colors ${
+              isToday ? "opacity-30 cursor-not-allowed" : "hover:bg-surface-hover"
+            }`}
+          >
+            <ChevronRight className="w-4 h-4 text-text-secondary" />
+          </button>
+        </div>
+
         {/* Total card */}
         <div className="rounded-xl bg-surface-light border border-border p-4">
           <div className="flex items-center justify-between">
             <div>
               <p className="text-xs text-text-muted uppercase tracking-wider font-medium mb-1">
-                Общее время
+                Время за день
               </p>
               <p className="text-2xl font-bold tracking-tight text-text-primary">
                 {formatTimeLabel(totalTime)}
