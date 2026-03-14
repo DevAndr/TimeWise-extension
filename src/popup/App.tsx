@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Clock, Globe, Timer, Settings, Check, Cloud, CloudOff, ArrowLeft, Eye, EyeOff, RefreshCw, Loader2, ChevronLeft, ChevronRight, Plus, X, Ban } from "lucide-react";
+import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from "../components/ui/context-menu";
 import { api, getAuthHeaders } from "../api/axiosInstance";
 
 interface SiteTime {
@@ -453,6 +454,16 @@ function App() {
     return () => clearInterval(interval);
   }, [page, selectedDate]);
 
+  async function addToExcluded(domain: string) {
+    const result = await chrome.storage.local.get("excludedDomains");
+    const current = (result.excludedDomains as string[] | undefined) ?? [];
+    if (current.includes(domain)) return;
+    const updated = [...current, domain];
+    await chrome.storage.local.set({ excludedDomains: updated });
+    excludedRef.current = updated;
+    setSites((prev) => prev.filter((s) => s.domain !== domain));
+  }
+
   if (page === "settings") {
     return <SettingsPage onBack={() => setPage("main")} />;
   }
@@ -483,7 +494,7 @@ function App() {
             )}
             <button
               onClick={() => setPage("settings")}
-              className="w-8 h-8 rounded-lg bg-surface-light border border-border flex items-center justify-center hover:bg-surface-hover transition-colors"
+              className="w-8 h-8 rounded-lg bg-surface-light flex items-center justify-center hover:bg-surface-hover transition-colors cursor-pointer"
             >
               <Settings className="w-4 h-4 text-text-secondary" />
             </button>
@@ -491,7 +502,7 @@ function App() {
         </div>
 
         {/* Date navigation */}
-        <div className="flex items-center justify-between rounded-xl bg-surface-light border border-border px-3 py-2.5 mb-3">
+        <div className="flex items-center justify-between rounded-xl bg-surface-light px-3 py-2.5 mb-3">
           <button
             onClick={() => setSelectedDate(shiftDate(selectedDate, -1))}
             className="w-7 h-7 rounded-lg hover:bg-surface-hover flex items-center justify-center transition-colors"
@@ -516,7 +527,7 @@ function App() {
         </div>
 
         {/* Total card */}
-        <div className="rounded-xl bg-surface-light border border-border p-4">
+        <div className="rounded-xl bg-surface-light p-4">
           <div className="flex items-center justify-between">
             <div>
               <p className="text-xs text-text-muted uppercase tracking-wider font-medium mb-1">
@@ -552,55 +563,64 @@ function App() {
             {sites.map((site, index) => {
               const isActive = site.domain === activeDomain;
               return (
-                <div
-                  key={site.domain}
-                  className={`group relative rounded-xl px-3.5 py-3 transition-all duration-200 ${
-                    isActive
-                      ? "bg-accent-glow border border-accent/20"
-                      : "bg-surface-light/60 hover:bg-surface-hover border border-transparent"
-                  }`}
-                >
-                  <div className="flex items-center justify-between mb-2">
-                    <div className="flex items-center gap-2.5 min-w-0">
-                      <span className="text-xs text-text-muted w-4 text-right shrink-0 font-mono">
-                        {index + 1}
-                      </span>
-                      <img
-                        src={`https://www.google.com/s2/favicons?domain=${site.domain}&sz=32`}
-                        alt=""
-                        className="w-4 h-4 rounded shrink-0"
-                        onError={(e) => {
-                          (e.target as HTMLImageElement).style.display = "none";
-                        }}
-                      />
-                      <span className={`text-sm truncate ${
-                        isActive ? "text-text-primary font-medium" : "text-text-secondary"
-                      }`}>
-                        {site.domain}
-                      </span>
-                      {isActive && (
-                        <span className="w-1.5 h-1.5 rounded-full bg-green animate-pulse-dot shrink-0" />
-                      )}
-                    </div>
-                    <span className={`text-sm tabular-nums font-mono shrink-0 ml-3 ${
-                      isActive ? "text-accent-light font-medium" : "text-text-secondary"
-                    }`}>
-                      {formatTime(site.time)}
-                    </span>
-                  </div>
-
-                  {/* Progress bar */}
-                  <div className="ml-6.5 h-1 rounded-full bg-border/60 overflow-hidden">
+                <ContextMenu key={site.domain}>
+                  <ContextMenuTrigger asChild>
                     <div
-                      className={`h-full rounded-full transition-all duration-500 ${
+                      className={`group relative rounded-xl px-3.5 py-3 transition-all duration-200 ${
                         isActive
-                          ? "bg-accent"
-                          : "bg-text-muted/40"
+                          ? "bg-accent-glow border border-accent/20"
+                          : "bg-surface-light/60 hover:bg-surface-hover border border-transparent"
                       }`}
-                      style={{ width: `${getPercent(site.time, maxTime)}%` }}
-                    />
-                  </div>
-                </div>
+                    >
+                      <div className="flex items-center justify-between mb-2">
+                        <div className="flex items-center gap-2.5 min-w-0">
+                          <span className="text-xs text-text-muted w-4 text-right shrink-0 font-mono">
+                            {index + 1}
+                          </span>
+                          <img
+                            src={`https://www.google.com/s2/favicons?domain=${site.domain}&sz=32`}
+                            alt=""
+                            className="w-4 h-4 rounded shrink-0"
+                            onError={(e) => {
+                              (e.target as HTMLImageElement).style.display = "none";
+                            }}
+                          />
+                          <span className={`text-sm truncate ${
+                            isActive ? "text-text-primary font-medium" : "text-text-secondary"
+                          }`}>
+                            {site.domain}
+                          </span>
+                          {isActive && (
+                            <span className="w-1.5 h-1.5 rounded-full bg-green animate-pulse-dot shrink-0" />
+                          )}
+                        </div>
+                        <span className={`text-sm tabular-nums font-mono shrink-0 ml-3 ${
+                          isActive ? "text-accent-light font-medium" : "text-text-secondary"
+                        }`}>
+                          {formatTime(site.time)}
+                        </span>
+                      </div>
+
+                      {/* Progress bar */}
+                      <div className="ml-6.5 h-1 rounded-full bg-border/60 overflow-hidden">
+                        <div
+                          className={`h-full rounded-full transition-all duration-500 ${
+                            isActive
+                              ? "bg-accent"
+                              : "bg-text-muted/40"
+                          }`}
+                          style={{ width: `${getPercent(site.time, maxTime)}%` }}
+                        />
+                      </div>
+                    </div>
+                  </ContextMenuTrigger>
+                  <ContextMenuContent>
+                    <ContextMenuItem onClick={() => addToExcluded(site.domain)}>
+                      <Ban className="w-4 h-4 text-red-400" />
+                      <span>Добавить в исключения</span>
+                    </ContextMenuItem>
+                  </ContextMenuContent>
+                </ContextMenu>
               );
             })}
           </div>
