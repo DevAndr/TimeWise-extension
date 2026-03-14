@@ -359,15 +359,60 @@ async function connectWebSocket() {
       const notifResult = await chrome.storage.local.get("notificationsEnabled");
       if (notifResult.notificationsEnabled === false) return;
 
-      if (message.event === "goal_reached") {
-        const { domain, dailyGoal, currentProgress } = message.data;
-        chrome.notifications.create(`goal-${domain}-${Date.now()}`, {
-          type: "basic",
-          iconUrl: chrome.runtime.getURL("icon-128.png"),
-          title: `Цель достигнута — ${domain}`,
-          message: `Вы провели ${formatGoalTime(currentProgress)} из ${formatGoalTime(dailyGoal)}`,
-          priority: 2,
-        });
+      const iconUrl = chrome.runtime.getURL("icon-128.png");
+      const { domain, dailyGoal, currentProgress } = message.data ?? {};
+      const id = `${message.event}-${domain}-${Date.now()}`;
+
+      switch (message.event) {
+        case "goal_halfway":
+          chrome.notifications.create(id, {
+            type: "basic",
+            iconUrl,
+            title: `Половина лимита — ${domain}`,
+            message: `${formatGoalTime(currentProgress)} из ${formatGoalTime(dailyGoal)} (50%)`,
+            priority: 1,
+          });
+          break;
+
+        case "goal_warning":
+          chrome.notifications.create(id, {
+            type: "basic",
+            iconUrl,
+            title: `Приближение к лимиту — ${domain}`,
+            message: `${formatGoalTime(currentProgress)} из ${formatGoalTime(dailyGoal)} (80%)`,
+            priority: 2,
+          });
+          break;
+
+        case "goal_reached":
+          chrome.notifications.create(id, {
+            type: "basic",
+            iconUrl,
+            title: `Цель достигнута — ${domain}`,
+            message: `Вы провели ${formatGoalTime(currentProgress)} из ${formatGoalTime(dailyGoal)}`,
+            priority: 2,
+          });
+          break;
+
+        case "goal_exceeded":
+          chrome.notifications.create(id, {
+            type: "basic",
+            iconUrl,
+            title: `Лимит превышен — ${domain}`,
+            message: `${formatGoalTime(currentProgress)} из ${formatGoalTime(dailyGoal)} (150%)`,
+            priority: 2,
+          });
+          break;
+
+        case "new_domain":
+          chrome.notifications.create(id, {
+            type: "basic",
+            iconUrl,
+            title: "Новый сайт",
+            message: `Первое посещение ${domain}`,
+            priority: 0,
+          });
+          break;
       }
     } catch {
       console.warn("[TimeWise WS] Ошибка парсинга:", event.data);
