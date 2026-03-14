@@ -181,8 +181,31 @@ async function flushSession() {
   await setActiveSession({ ...session, startTime: now });
 }
 
+async function getExcludedDomains(): Promise<string[]> {
+  const result = await chrome.storage.local.get("excludedDomains");
+  return (result.excludedDomains as string[] | undefined) ?? [];
+}
+
+function isDomainExcluded(domain: string, excludedDomains: string[]): boolean {
+  return excludedDomains.some((excluded) => {
+    if (domain === excluded) return true;
+    // Поддержка поддоменов: исключение "example.com" блокирует "sub.example.com"
+    if (domain.endsWith("." + excluded)) return true;
+    return false;
+  });
+}
+
 async function startTracking(tabId: number, url: string | undefined, title?: string) {
   if (!url || url.startsWith("chrome://") || url.startsWith("chrome-extension://")) return;
+
+  const domain = getDomainFromUrl(url);
+  if (domain) {
+    const excluded = await getExcludedDomains();
+    if (isDomainExcluded(domain, excluded)) {
+      await stopTracking();
+      return;
+    }
+  }
 
   await flushSession();
   await setActiveSession({ tabId, startTime: Date.now(), url, title });

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Clock, Globe, Timer, Settings, Check, Cloud, CloudOff, ArrowLeft, Eye, EyeOff, RefreshCw, Loader2, ChevronLeft, ChevronRight } from "lucide-react";
+import { Clock, Globe, Timer, Settings, Check, Cloud, CloudOff, ArrowLeft, Eye, EyeOff, RefreshCw, Loader2, ChevronLeft, ChevronRight, Plus, X, Ban } from "lucide-react";
 import { api, getAuthHeaders } from "../api/axiosInstance";
 
 interface SiteTime {
@@ -82,14 +82,32 @@ function SettingsPage({ onBack }: { onBack: () => void }) {
   const [pendingCount, setPendingCount] = useState(0);
   const [syncing, setSyncing] = useState(false);
   const [syncResult, setSyncResult] = useState<{ ok: boolean; message: string } | null>(null);
+  const [excludedDomains, setExcludedDomains] = useState<string[]>([]);
+  const [newDomain, setNewDomain] = useState("");
 
   useEffect(() => {
-    chrome.storage.local.get(["apiToken", "pendingQueue"], (result) => {
+    chrome.storage.local.get(["apiToken", "pendingQueue", "excludedDomains"], (result) => {
       setToken((result.apiToken as string) ?? "");
       const queue = (result.pendingQueue as unknown[]) ?? [];
       setPendingCount(queue.length);
+      setExcludedDomains((result.excludedDomains as string[] | undefined) ?? []);
     });
   }, []);
+
+  function addExcludedDomain() {
+    const domain = newDomain.trim().toLowerCase().replace(/^https?:\/\//, "").replace(/\/.*$/, "");
+    if (!domain || excludedDomains.includes(domain)) return;
+    const updated = [...excludedDomains, domain];
+    setExcludedDomains(updated);
+    chrome.storage.local.set({ excludedDomains: updated });
+    setNewDomain("");
+  }
+
+  function removeExcludedDomain(domain: string) {
+    const updated = excludedDomains.filter((d) => d !== domain);
+    setExcludedDomains(updated);
+    chrome.storage.local.set({ excludedDomains: updated });
+  }
 
   async function handleSave() {
     const trimmed = token.trim();
@@ -269,6 +287,74 @@ function SettingsPage({ onBack }: { onBack: () => void }) {
             </p>
           )}
         </div>
+
+        {/* Исключения */}
+        <div className="rounded-xl bg-surface-light border border-border p-4 mt-3">
+          <label className="text-xs text-text-muted uppercase tracking-wider font-medium mb-2 block">
+            <div className="flex items-center gap-1.5">
+              <Ban className="w-3.5 h-3.5" />
+              Исключения
+            </div>
+          </label>
+          <p className="text-xs text-text-muted mb-3">
+            Домены из этого списка не будут отслеживаться
+          </p>
+
+          <div className="flex gap-2 mb-3">
+            <input
+              type="text"
+              value={newDomain}
+              onChange={(e) => setNewDomain(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && addExcludedDomain()}
+              placeholder="example.com"
+              className="flex-1 bg-surface border border-border rounded-lg px-3 py-2 text-sm text-text-primary placeholder:text-text-muted outline-none focus:border-accent/50 transition-colors"
+            />
+            <button
+              onClick={addExcludedDomain}
+              disabled={!newDomain.trim()}
+              className={`px-3 py-2 rounded-lg text-sm font-medium transition-all ${
+                !newDomain.trim()
+                  ? "bg-surface border border-border text-text-muted cursor-not-allowed"
+                  : "bg-accent/15 text-accent-light hover:bg-accent/25"
+              }`}
+            >
+              <Plus className="w-4 h-4" />
+            </button>
+          </div>
+
+          {excludedDomains.length > 0 ? (
+            <div className="flex flex-col gap-1.5">
+              {excludedDomains.map((domain) => (
+                <div
+                  key={domain}
+                  className="flex items-center justify-between bg-surface rounded-lg px-3 py-2 border border-border"
+                >
+                  <div className="flex items-center gap-2 min-w-0">
+                    <img
+                      src={`https://www.google.com/s2/favicons?domain=${domain}&sz=32`}
+                      alt=""
+                      className="w-4 h-4 rounded shrink-0"
+                      onError={(e) => {
+                        (e.target as HTMLImageElement).style.display = "none";
+                      }}
+                    />
+                    <span className="text-sm text-text-secondary truncate">{domain}</span>
+                  </div>
+                  <button
+                    onClick={() => removeExcludedDomain(domain)}
+                    className="w-6 h-6 rounded-md hover:bg-red-500/15 flex items-center justify-center transition-colors shrink-0"
+                  >
+                    <X className="w-3.5 h-3.5 text-red-400" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="text-xs text-text-muted text-center py-2">
+              Список пуст
+            </p>
+          )}
+        </div>
       </div>
     </div>
   );
@@ -285,6 +371,7 @@ function App() {
   const baseDataRef = useRef<Record<string, number>>({});
   const sessionRef = useRef<ActiveSession | null>(null);
   const selectedDateRef = useRef(selectedDate);
+  const excludedRef = useRef<string[]>([]);
 
   // Синхронизируем ref с состоянием для использования в интервале
   useEffect(() => {
@@ -302,6 +389,10 @@ function App() {
   useEffect(() => {
     if (page !== "main") return;
 
+    function isDomainExcluded(domain: string, excluded: string[]): boolean {
+      return excluded.some((ex) => domain === ex || domain.endsWith("." + ex));
+    }
+
     function updateSites(
       baseData: Record<string, number>,
       session: ActiveSession | null
@@ -316,7 +407,9 @@ function App() {
         }
       }
 
+      const excluded = excludedRef.current;
       const entries: SiteTime[] = Object.entries(data)
+        .filter(([domain]) => !isDomainExcluded(domain, excluded))
         .map(([domain, time]) => ({ domain, time }))
         .sort((a, b) => b.time - a.time);
 
@@ -327,6 +420,10 @@ function App() {
     const viewingToday = selectedDate === todayKey;
 
     async function loadData() {
+      // Загружаем исключения
+      const exResult = await chrome.storage.local.get("excludedDomains");
+      excludedRef.current = (exResult.excludedDomains as string[] | undefined) ?? [];
+
       let timeData: Record<string, number> = {};
       let session: ActiveSession | null = null;
 
