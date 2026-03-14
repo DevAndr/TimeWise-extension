@@ -3,6 +3,7 @@ import {Routes, Route, Navigate} from "react-router";
 import {MainPage} from "./pages/MainPage";
 import {SettingsPage} from "./pages/SettingsPage";
 import {GetStartedPage} from "./pages/GetStartedPage";
+import {GoalsPage} from "./pages/GoalsPage";
 
 function App() {
     const [ready, setReady] = useState(false);
@@ -26,6 +27,7 @@ function App() {
             <Route path="/get-started" element={<GetStartedPage onComplete={completeOnboarding}/>}/>
             <Route path="/" element={needsOnboarding ? <Navigate to="/get-started" replace/> : <MainPage/>}/>
             <Route path="/settings" element={<SettingsPage/>}/>
+            <Route path="/goals" element={<GoalsPage/>}/>
         </Routes>
     );
 }

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Timer, Settings, Cloud } from "lucide-react";
+import { Timer, Settings, Cloud, Target } from "lucide-react";
 import { useNavigate } from "react-router";
 
 interface HeaderProps {
@@ -34,6 +34,12 @@ export function Header({ activeDomain }: HeaderProps) {
         {synced && (
           <Cloud className="w-3.5 h-3.5 text-accent-light" />
         )}
+        <button
+          onClick={() => navigate("/goals")}
+          className="w-8 h-8 rounded-lg bg-surface-light flex items-center justify-center hover:bg-surface-hover transition-colors cursor-pointer"
+        >
+          <Target className="w-4 h-4 text-text-secondary" />
+        </button>
         <button
           onClick={() => navigate("/settings")}
           className="w-8 h-8 rounded-lg bg-surface-light flex items-center justify-center hover:bg-surface-hover transition-colors cursor-pointer"

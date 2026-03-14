@@ -43,3 +43,28 @@ To load the extension in Chrome during development:
 Расширение для учета сколько времени проводит пользователь на сайтах 
 взаимодействие с бэком с помощью axios
 использовать токен для апи
+
+## Уведомления
+
+WebSocket (/ws)
+
+Подключение: ws://localhost:3031/ws?token=<api_token>
+
+Клиент подключается с API-токеном в query-параметре. При невалидном токене соединение закрывается с кодом 4003.
+
+Уведомление goal_reached
+
+Когда currentProgress пересекает порог dailyGoal при обработке POST /activities или POST /activities/batch, всем подключённым клиентам с этим токеном отправляется сообщение:
+
+```json
+{                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             
+    "event": "goal_reached",                                                                                                                                                                                                                                                                                                                                                                                                                                                                  
+    "data": {
+        "domain": "youtube.com",                                                                                                                                                                                                                                                                                                                                                                                                                                                                  
+        "dailyGoal": 7200,                                                                                                                                                                                                                                                                                                                                                                                                                                                                        
+        "currentProgress": 7320                                                                                                                                                                                                                                                                                                                                                                                                                                                                   
+    }                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           
+}
+```
+
+Уведомление срабатывает ровно один раз — только при пересечении порога (было < dailyGoal, стало >= dailyGoal).     

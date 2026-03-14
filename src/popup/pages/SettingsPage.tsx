@@ -1,5 +1,5 @@
 import {useEffect, useState} from "react";
-import {Check, Eye, EyeOff} from "lucide-react";
+import {Check, Eye, EyeOff, Bell, BellOff} from "lucide-react";
 import ExcludedDomains from "@/popup/components/Settings/ExcludedDomains/ExcludedDomains.tsx";
 import SyncData from "@/popup/components/Settings/Sync/SyncData.tsx";
 import SyncStatus from "@/popup/components/Settings/Sync/SyncStatus.tsx";
@@ -10,14 +10,22 @@ export function SettingsPage() {
     const [saved, setSaved] = useState(false);
     const [showToken, setShowToken] = useState(false);
     const [pendingCount, setPendingCount] = useState(0);
+    const [notificationsEnabled, setNotificationsEnabled] = useState(true);
 
     useEffect(() => {
-        chrome.storage.local.get(["apiToken", "pendingQueue"], (result) => {
+        chrome.storage.local.get(["apiToken", "pendingQueue", "notificationsEnabled"], (result) => {
             setToken((result.apiToken as string) ?? "");
             const queue = (result.pendingQueue as unknown[]) ?? [];
             setPendingCount(queue.length);
+            setNotificationsEnabled(result.notificationsEnabled !== false);
         });
     }, []);
+
+    function toggleNotifications() {
+        const newValue = !notificationsEnabled;
+        setNotificationsEnabled(newValue);
+        chrome.storage.local.set({notificationsEnabled: newValue});
+    }
 
 
     async function handleSave() {
@@ -75,6 +83,35 @@ export function SettingsPage() {
 
                 <SyncStatus token={token} pendingCount={pendingCount}/>
                 <SyncData token={token} setPendingCount={setPendingCount}/>
+
+                {/* Уведомления */}
+                <div className="rounded-xl bg-surface-light border border-border p-4 mt-3">
+                    <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2.5">
+                            {notificationsEnabled
+                                ? <Bell className="w-4 h-4 text-accent-light"/>
+                                : <BellOff className="w-4 h-4 text-text-muted"/>
+                            }
+                            <div>
+                                <p className="text-sm text-text-secondary font-medium">Уведомления</p>
+                                <p className="text-xs text-text-muted">Достижение дневных целей</p>
+                            </div>
+                        </div>
+                        <button
+                            onClick={toggleNotifications}
+                            className={`relative w-10 h-5.5 rounded-full transition-colors ${
+                                notificationsEnabled ? "bg-accent" : "bg-border"
+                            }`}
+                        >
+                            <span
+                                className={`absolute top-0.5 left-0.5 w-4.5 h-4.5 rounded-full bg-white transition-transform ${
+                                    notificationsEnabled ? "translate-x-4.5" : "translate-x-0"
+                                }`}
+                            />
+                        </button>
+                    </div>
+                </div>
+
                 <ExcludedDomains/>
             </div>
         </div>

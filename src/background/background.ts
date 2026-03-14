@@ -314,11 +314,104 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
   }
 });
 
-// При старте service worker — миграция и начало отслеживания
+// --- WebSocket уведомления ---
+
+const WS_BASE_URL = "ws://localhost:3031/ws";
+const WS_RECONNECT_DELAY = 5000; // 5 секунд между попытками реконнекта
+
+let ws: WebSocket | null = null;
+let wsReconnectTimer: ReturnType<typeof setTimeout> | null = null;
+
+function formatGoalTime(seconds: number): string {
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  if (hours > 0) return `${hours}ч ${minutes}м`;
+  return `${minutes} мин`;
+}
+
+async function connectWebSocket() {
+  // Закрываем предыдущее соединение
+  if (ws) {
+    ws.onclose = null;
+    ws.close();
+    ws = null;
+  }
+
+  const result = await chrome.storage.local.get("apiToken");
+  const token = result.apiToken as string | undefined;
+  if (!token) {
+    console.log("[TimeWise WS] Нет токена, WebSocket не подключён");
+    return;
+  }
+
+  const url = `${WS_BASE_URL}?token=${encodeURIComponent(token)}`;
+  ws = new WebSocket(url);
+
+  ws.onopen = () => {
+    console.log("[TimeWise WS] Подключён");
+  };
+
+  ws.onmessage = async (event) => {
+    try {
+      const message = JSON.parse(event.data as string);
+      console.log("[TimeWise WS] Получено:", message);
+
+      const notifResult = await chrome.storage.local.get("notificationsEnabled");
+      if (notifResult.notificationsEnabled === false) return;
+
+      if (message.event === "goal_reached") {
+        const { domain, dailyGoal, currentProgress } = message.data;
+        chrome.notifications.create(`goal-${domain}-${Date.now()}`, {
+          type: "basic",
+          iconUrl: chrome.runtime.getURL("icon-128.png"),
+          title: `Цель достигнута — ${domain}`,
+          message: `Вы провели ${formatGoalTime(currentProgress)} из ${formatGoalTime(dailyGoal)}`,
+          priority: 2,
+        });
+      }
+    } catch {
+      console.warn("[TimeWise WS] Ошибка парсинга:", event.data);
+    }
+  };
+
+  ws.onclose = (event) => {
+    ws = null;
+    // Код 4003 — невалидный токен, не реконнектимся
+    if (event.code === 4003) {
+      console.warn("[TimeWise WS] Невалидный токен, реконнект отменён");
+      return;
+    }
+    console.log("[TimeWise WS] Отключён, реконнект через", WS_RECONNECT_DELAY, "мс");
+    scheduleReconnect();
+  };
+
+  ws.onerror = () => {
+    console.warn("[TimeWise WS] Ошибка соединения");
+  };
+}
+
+function scheduleReconnect() {
+  if (wsReconnectTimer) clearTimeout(wsReconnectTimer);
+  wsReconnectTimer = setTimeout(() => {
+    wsReconnectTimer = null;
+    connectWebSocket();
+  }, WS_RECONNECT_DELAY);
+}
+
+// Переподключаемся при изменении токена
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area === "local" && changes.apiToken) {
+    console.log("[TimeWise WS] Токен изменён, переподключение...");
+    connectWebSocket();
+  }
+});
+
+// При старте service worker — миграция, отслеживание, WebSocket
 migrateIfNeeded().then(() => {
   chrome.tabs.query({ active: true, currentWindow: true }, async (tabs) => {
     if (tabs[0]?.id !== undefined) {
       await startTracking(tabs[0].id, tabs[0].url, tabs[0].title);
     }
   });
+  connectWebSocket();
 });
