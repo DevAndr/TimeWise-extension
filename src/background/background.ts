@@ -316,7 +316,7 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
 
 // --- WebSocket уведомления ---
 
-const WS_BASE_URL = "ws://localhost:3031/ws";
+const WS_BASE_URL = (import.meta.env.VITE_API_WS ?? "ws://192.168.50.233:3031/ws") //"ws://localhost:3031/ws";
 const WS_RECONNECT_DELAY = 5000; // 5 секунд между попытками реконнекта
 
 let ws: WebSocket | null = null;
